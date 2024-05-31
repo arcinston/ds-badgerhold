@@ -4,17 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
-	"strings"
-	"sync"
-	"time"
-
 	badger "github.com/dgraph-io/badger/v4"
 	ds "github.com/ipfs/go-datastore"
 	dsq "github.com/ipfs/go-datastore/query"
 	logger "github.com/ipfs/go-log/v2"
 	goprocess "github.com/jbenet/goprocess"
+	badgerHold "github.com/timshannon/badgerhold/v4"
 	"go.uber.org/zap"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
 )
 
 var log = logger.Logger("badger4")
@@ -22,7 +22,8 @@ var log = logger.Logger("badger4")
 var ErrClosed = errors.New("datastore closed")
 
 type Datastore struct {
-	DB *badger.DB
+	DB    *badger.DB
+	Store *badgerHold.Store
 
 	closeLk   sync.RWMutex
 	closed    bool
@@ -78,7 +79,7 @@ type Options struct {
 	// The default value is 0, which means no TTL.
 	TTL time.Duration
 
-	badger.Options
+	badgerHold.Options
 }
 
 // DefaultOptions are the default options for the badger datastore.
@@ -134,7 +135,7 @@ func init() {
 		GcDiscardRatio: 0.2,
 		GcInterval:     15 * time.Minute,
 		GcSleep:        10 * time.Second,
-		Options:        badger.DefaultOptions(""),
+		Options:        badgerHold.DefaultOptions,
 	}
 }
 
@@ -151,7 +152,7 @@ var _ ds.Batching = (*Datastore)(nil)
 // DO NOT set the Dir and/or ValuePath fields of opt, they will be set for you.
 func NewDatastore(path string, options *Options) (*Datastore, error) {
 	// Copy the options because we modify them.
-	var opt badger.Options
+	var opt badgerHold.Options
 	var gcDiscardRatio float64
 	var gcSleep time.Duration
 	var gcInterval time.Duration
@@ -183,7 +184,8 @@ func NewDatastore(path string, options *Options) (*Datastore, error) {
 		skipLogger:    *log.Desugar().WithOptions(zap.AddCallerSkip(2)).Sugar(),
 	}
 
-	kv, err := badger.Open(opt)
+	kv, err := badgerHold.Open(opt)
+	db := kv.Badger()
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "manifest has unsupported version:") {
 			err = fmt.Errorf("unsupported badger version, use github.com/ipfs/badgerds-upgrade to upgrade: %s", err.Error())
@@ -192,7 +194,8 @@ func NewDatastore(path string, options *Options) (*Datastore, error) {
 	}
 
 	ds := &Datastore{
-		DB:             kv,
+		DB:             db,
+		Store:          kv,
 		closing:        make(chan struct{}),
 		gcDiscardRatio: gcDiscardRatio,
 		gcSleep:        gcSleep,
